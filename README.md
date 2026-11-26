@@ -7,10 +7,10 @@ DanceHub CRM is a web application for dance academies. Each academy can have mul
 The application runs as three Docker Compose services:
 
 - **Frontend:** React single-page app served by Vite. It provides administrator sign-in, a signed-in home screen, and a protected operator registration page.
-- **Backend:** FastAPI service that handles authentication, operator-only academy registration, and the health check. It uses SQLAlchemy and Alembic to access and migrate the database.
+- **Backend:** FastAPI service that handles authentication, operator-only academy registration, and the health check. Endpoints are versioned under `/api/v1`; routers, services, schemas, models, security, configuration, and database access are separated into their own modules.
 - **Database:** PostgreSQL stores academies, administrators, and refresh sessions. The database is persisted in the `postgres_data` Docker volume.
 
-The frontend sends API requests to the backend at `http://localhost:8000` and uses HTTP-only cookies for authentication. On backend startup, the service waits for PostgreSQL, applies Alembic migrations, and then starts the API.
+The frontend sends API requests to the backend at `http://localhost:8000` and uses HTTP-only cookies for authentication. The backend starts even when PostgreSQL is unavailable, reports liveness at `/api/v1/health`, and reports database readiness at `/api/v1/ready`. Database-backed endpoints return `503 Service Unavailable` until the database reconnects and migrations complete. Reconnection uses exponential backoff; the connection pool validates idle connections and applies configurable size, overflow, timeout, and recycling limits.
 
 ## Technologies
 
@@ -42,7 +42,8 @@ Run these commands from the repository root in WSL. Docker and Docker Compose mu
    - Web app: <http://localhost:5173>
    - Backend API: <http://localhost:8000>
    - Interactive API documentation: <http://localhost:8000/docs>
-   - Health check: <http://localhost:8000/api/health>
+   - Liveness check: <http://localhost:8000/api/v1/health>
+   - Database readiness: <http://localhost:8000/api/v1/ready>
 
 Use the operator registration page at <http://localhost:5173/operator/register> to create an academy and its first administrator. This page requires the configured operator secret. The administrator password must be at least 12 characters and include an uppercase letter, a digit, and one of `-`, `!`, `#`, `=`, or `?`. After registration, sign in at <http://localhost:5173>.
 
