@@ -69,6 +69,21 @@ def register_academy(
     ):
         raise HTTPException(status_code=403, detail="Access denied")
 
+    password = registration.administrator_password
+    corrections = []
+    if len(password) < 12:
+        corrections.append("at least 12 characters")
+    if not any(character.isupper() for character in password):
+        corrections.append("an uppercase letter")
+    if not any(character.isdigit() for character in password):
+        corrections.append("a digit")
+    if not any(character in "-!#=?" for character in password):
+        corrections.append("a special character from - ! # = ?")
+    if corrections:
+        raise HTTPException(
+            status_code=422, detail="Password must include " + ", ".join(corrections)
+        )
+
     academy = Academy(
         id=_uuid7(),
         name=registration.academy_name,

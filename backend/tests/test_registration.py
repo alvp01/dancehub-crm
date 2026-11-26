@@ -130,3 +130,35 @@ def test_rejects_case_insensitive_academy_name_phone_and_administrator_email_dup
             assert connection.execute(
                 text("SELECT COUNT(*) FROM administrators")
             ).scalar_one() == 1
+
+
+@pytest.mark.parametrize(
+    ("password", "correction"),
+    [
+        ("Dance!123", "12"),
+        ("dancehub!2026", "uppercase"),
+        ("DanceHub!Dance", "digit"),
+        ("DanceHub2026", "special"),
+    ],
+)
+def test_rejects_passwords_failing_each_specified_rule_with_actionable_errors(
+    registration_client, password, correction
+):
+    client, engine = registration_client
+    response = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": password,
+        },
+    )
+
+    assert response.status_code == 422
+    assert correction in str(response.json()).lower()
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT COUNT(*) FROM academies")).scalar_one() == 0
+        assert connection.execute(text("SELECT COUNT(*) FROM administrators")).scalar_one() == 0
