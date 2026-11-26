@@ -349,6 +349,58 @@ def test_expired_refresh_token_is_rejected(registration_client):
     assert response.status_code == 401
 
 
+def test_backend_sign_out_revokes_refresh_session_and_clears_cookies(
+    registration_client,
+):
+    client, _ = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "DanceHub!2026"},
+    )
+    assert login.status_code == 200
+    access_token = client.cookies.get("dancehub_access_token")
+    refresh_token = client.cookies.get("dancehub_refresh_token")
+
+    signed_out = client.post("/api/auth/logout")
+
+    assert signed_out.status_code == 200
+    cleared_cookies = signed_out.headers.get_list("set-cookie")
+    assert any(
+        "dancehub_access_token=" in cookie and "max-age=0" in cookie.lower()
+        for cookie in cleared_cookies
+    )
+    assert any(
+        "dancehub_refresh_token=" in cookie and "max-age=0" in cookie.lower()
+        for cookie in cleared_cookies
+    )
+    with TestClient(
+        client.app,
+        base_url="https://testserver",
+        cookies={"dancehub_refresh_token": refresh_token},
+    ) as replay_client:
+        replay = replay_client.post("/api/auth/refresh")
+    assert replay.status_code == 401
+    with TestClient(
+        client.app,
+        base_url="https://testserver",
+        cookies={"dancehub_access_token": access_token},
+    ) as signed_out_client:
+        profile = signed_out_client.get("/api/auth/me")
+    assert profile.status_code == 401
+
+
 def test_login_returns_same_generic_error_for_invalid_credentials(registration_client):
     client, _ = registration_client
     registration = client.post(

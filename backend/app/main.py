@@ -116,10 +116,24 @@ def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    refresh_token = secrets.token_urlsafe(48)
+    refresh_session_id = _uuid7()
+    with SessionLocal() as session:
+        session.add(
+            RefreshSession(
+                id=refresh_session_id,
+                administrator_id=administrator.id,
+                token_hash=hashlib.sha256(refresh_token.encode()).hexdigest(),
+                expires_at=datetime.now(timezone.utc)
+                + timedelta(seconds=REFRESH_SESSION_LIFETIME_SECONDS),
+            )
+        )
+        session.commit()
     now = int(time.time())
     access_token = jwt.encode(
         {
             "sub": administrator.id,
+            "sid": refresh_session_id,
             "iss": JWT_ISSUER,
             "aud": JWT_AUDIENCE,
             "iat": now,
@@ -138,18 +152,6 @@ def login(
         max_age=ACCESS_TOKEN_LIFETIME_SECONDS,
         path="/api",
     )
-    refresh_token = secrets.token_urlsafe(48)
-    with SessionLocal() as session:
-        session.add(
-            RefreshSession(
-                id=_uuid7(),
-                administrator_id=administrator.id,
-                token_hash=hashlib.sha256(refresh_token.encode()).hexdigest(),
-                expires_at=datetime.now(timezone.utc)
-                + timedelta(seconds=REFRESH_SESSION_LIFETIME_SECONDS),
-            )
-        )
-        session.commit()
     response.set_cookie(
         key="dancehub_refresh_token",
         value=refresh_token,
@@ -196,9 +198,10 @@ def refresh_session(request: Request, response: Response) -> dict[str, str]:
 
         current.revoked_at = now
         new_refresh_token = secrets.token_urlsafe(48)
+        new_refresh_session_id = _uuid7()
         session.add(
             RefreshSession(
-                id=_uuid7(),
+                id=new_refresh_session_id,
                 administrator_id=administrator.id,
                 token_hash=hashlib.sha256(new_refresh_token.encode()).hexdigest(),
                 expires_at=now + timedelta(seconds=REFRESH_SESSION_LIFETIME_SECONDS),
@@ -209,6 +212,7 @@ def refresh_session(request: Request, response: Response) -> dict[str, str]:
     access_token = jwt.encode(
         {
             "sub": administrator.id,
+            "sid": new_refresh_session_id,
             "iss": JWT_ISSUER,
             "aud": JWT_AUDIENCE,
             "iat": int(now.timestamp()),
@@ -239,6 +243,40 @@ def refresh_session(request: Request, response: Response) -> dict[str, str]:
     return {"message": "Session renewed."}
 
 
+@app.post("/api/auth/logout")
+def logout(request: Request, response: Response) -> dict[str, str]:
+    refresh_token = request.cookies.get("dancehub_refresh_token")
+    if refresh_token:
+        with SessionLocal() as session:
+            current = session.scalar(
+                select(RefreshSession)
+                .where(
+                    RefreshSession.token_hash
+                    == hashlib.sha256(refresh_token.encode()).hexdigest()
+                )
+                .with_for_update()
+            )
+            if current is not None and current.revoked_at is None:
+                current.revoked_at = datetime.now(timezone.utc)
+                session.commit()
+
+    response.delete_cookie(
+        key="dancehub_access_token",
+        path="/api",
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+    )
+    response.delete_cookie(
+        key="dancehub_refresh_token",
+        path="/api/auth",
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+    )
+    return {"message": "Signed out."}
+
+
 def _get_administrator_session(request: Request) -> AdministratorSession:
     access_token = request.cookies.get("dancehub_access_token")
     if not access_token:
@@ -253,7 +291,7 @@ def _get_administrator_session(request: Request) -> AdministratorSession:
             algorithms=["HS256"],
             audience=JWT_AUDIENCE,
             issuer=JWT_ISSUER,
-            options={"require": ["sub", "exp", "iat", "jti"]},
+            options={"require": ["sub", "sid", "exp", "iat", "jti"]},
         )
     except jwt.InvalidTokenError as error:
         raise HTTPException(
@@ -263,6 +301,24 @@ def _get_administrator_session(request: Request) -> AdministratorSession:
         ) from error
 
     with SessionLocal() as session:
+        refresh_session = session.scalar(
+            select(RefreshSession).where(
+                RefreshSession.id == claims["sid"],
+                RefreshSession.administrator_id == claims["sub"],
+                RefreshSession.revoked_at.is_(None),
+            )
+        )
+        if refresh_session is None:
+            raise HTTPException(
+                status_code=401, detail="Invalid or expired access token."
+            )
+        refresh_expires_at = refresh_session.expires_at
+        if refresh_expires_at.tzinfo is None:
+            refresh_expires_at = refresh_expires_at.replace(tzinfo=timezone.utc)
+        if refresh_expires_at <= datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=401, detail="Invalid or expired access token."
+            )
         administrator = session.scalar(
             select(Administrator)
             .options(joinedload(Administrator.academy))
