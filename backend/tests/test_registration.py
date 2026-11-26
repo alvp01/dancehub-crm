@@ -227,6 +227,37 @@ def test_login_sets_http_only_access_jwt_cookie(registration_client):
     assert "access_token" not in response.json()
 
 
+def test_login_returns_same_generic_error_for_invalid_credentials(registration_client):
+    client, _ = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+
+    wrong_password = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "wrong-password"},
+    )
+    unknown_email = client.post(
+        "/api/auth/login",
+        json={"email": "unknown@example.com", "password": "wrong-password"},
+    )
+
+    expected_error = {"detail": "Email or password is incorrect."}
+    assert wrong_password.status_code == 401
+    assert unknown_email.status_code == 401
+    assert wrong_password.json() == expected_error
+    assert unknown_email.json() == expected_error
+
+
 def test_valid_access_cookie_restores_profile_after_reload(registration_client):
     client, _ = registration_client
     registration = client.post(

@@ -83,6 +83,8 @@ test("signed_out_app_renders_email_and_password_fields", async () => {
         <App />
       </QueryClientProvider>
     );
+  });
+  await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
@@ -136,6 +138,41 @@ test("sign_in_form_submits_credentials_and_returns_administrator_session", async
   await act(async () => root.unmount());
 });
 
+test("sign_in_form_displays_generic_error_for_invalid_credentials", async () => {
+  document.body.innerHTML = '<div id="root"></div>';
+  const container = document.getElementById("root")!;
+  const root = createRoot(container);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } }
+  });
+  http.post.mockRejectedValueOnce({
+    isAxiosError: true,
+    response: { status: 401 }
+  });
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <SignInForm />
+      </QueryClientProvider>
+    );
+  });
+  (document.getElementById("email") as HTMLInputElement).value = "jamie@example.com";
+  (document.getElementById("password") as HTMLInputElement).value = "wrong-password";
+  await act(async () => {
+    container.querySelector("form")!.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+    "Email or password is incorrect."
+  );
+
+  await act(async () => root.unmount());
+});
+
 test("successful_sign_in_displays_crm_home", async () => {
   document.body.innerHTML = '<div id="root"></div>';
   const container = document.getElementById("root")!;
@@ -144,7 +181,7 @@ test("successful_sign_in_displays_crm_home", async () => {
     defaultOptions: { queries: { retry: false } }
   });
   http.post.mockResolvedValueOnce({
-    data: { access_token: "signed-token", token_type: "bearer", expires_in: 900 }
+    data: { message: "Signed in." }
   });
   http.get
     .mockRejectedValueOnce({ isAxiosError: true, response: { status: 401 } })
@@ -164,12 +201,17 @@ test("successful_sign_in_displays_crm_home", async () => {
       </QueryClientProvider>
     );
   });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
   (document.getElementById("email") as HTMLInputElement).value = "jamie@example.com";
   (document.getElementById("password") as HTMLInputElement).value = "DanceHub!2026";
   await act(async () => {
     container.querySelector("form")!.dispatchEvent(
       new Event("submit", { bubbles: true, cancelable: true })
     );
+  });
+  await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
