@@ -28,8 +28,17 @@ Sign-in uses email and password.
 - Containers: Docker Compose with PostgreSQL 18 Alpine, Python 3.11, and Node 24
 - Backend startup waits for database readiness and runs migrations/schema updates before serving
 
-## Current iteration
+## WSL and Docker development
 
-The current implementation is intentionally minimal: the backend exposes a string response endpoint
-and the frontend displays it. Do not implement registration or login unless a task explicitly asks
-for it.
+- Use the repository checkout in WSL for local development.
+- Run the application, tests, builds, and dependency installation through Docker Compose from the
+  WSL repository root. Do not install Python, Node.js, or project dependencies on the host.
+- Start the application with `docker compose up --build`.
+- Run backend tests with `docker compose run --build --no-deps --entrypoint python backend -m pytest -q`.
+- Run frontend tests with `docker compose run --build --no-deps --entrypoint npm frontend test`.
+- Stop the application with `docker compose down`.
+
+## Registration scope
+
+Academy registration is operator-only. Do not add public self-service registration or login unless
+a task explicitly asks for it.
