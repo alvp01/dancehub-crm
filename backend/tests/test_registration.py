@@ -1,3 +1,4 @@
+import hashlib
 import importlib
 from pathlib import Path
 from uuid import UUID
@@ -310,6 +311,42 @@ def test_refresh_rotates_token_and_slides_session_expiry(registration_client):
     ) as replay_client:
         replay = replay_client.post("/api/auth/refresh")
     assert replay.status_code == 401
+
+
+def test_expired_refresh_token_is_rejected(registration_client):
+    client, engine = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "DanceHub!2026"},
+    )
+    assert login.status_code == 200
+    refresh_token = client.cookies.get("dancehub_refresh_token")
+    token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE refresh_sessions SET expires_at = '2000-01-01 00:00:00' "
+                "WHERE token_hash = :token_hash"
+            ),
+            {"token_hash": token_hash},
+        )
+
+    response = client.post("/api/auth/refresh")
+
+    assert response.status_code == 401
 
 
 def test_login_returns_same_generic_error_for_invalid_credentials(registration_client):
