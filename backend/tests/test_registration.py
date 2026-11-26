@@ -1,3 +1,4 @@
+import hashlib
 import importlib
 from pathlib import Path
 from uuid import UUID
@@ -17,6 +18,7 @@ def registration_client(tmp_path, monkeypatch):
     with monkeypatch.context() as environment:
         environment.setenv("DATABASE_URL", database_url)
         environment.setenv("OPERATOR_SECRET", "test-operator-secret")
+        environment.setenv("JWT_SECRET", "test-jwt-secret-with-32-bytes-minimum")
         get_settings.cache_clear()
 
         import app.db
@@ -28,7 +30,7 @@ def registration_client(tmp_path, monkeypatch):
         command.upgrade(Config(str(config_path)), "head")
         engine = create_engine(database_url)
 
-        with TestClient(main_module.app) as client:
+        with TestClient(main_module.app, base_url="https://testserver") as client:
             yield client, engine
 
         engine.dispose()
@@ -132,6 +134,20 @@ def test_rejects_case_insensitive_academy_name_phone_and_administrator_email_dup
             ).scalar_one() == 1
 
 
+def test_refresh_session_storage_is_created_by_migration(registration_client):
+    _, engine = registration_client
+
+    with engine.connect() as connection:
+            table_name = connection.execute(
+                text(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'refresh_sessions'"
+                )
+            ).scalar_one_or_none()
+
+    assert table_name == "refresh_sessions"
+
+
 @pytest.mark.parametrize(
     ("password", "correction"),
     [
@@ -193,3 +209,257 @@ def test_denies_registration_without_a_valid_operator_secret(
     with engine.connect() as connection:
         assert connection.execute(text("SELECT COUNT(*) FROM academies")).scalar_one() == 0
         assert connection.execute(text("SELECT COUNT(*) FROM administrators")).scalar_one() == 0
+
+
+def test_login_sets_http_only_access_jwt_cookie(registration_client):
+    client, _ = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "DanceHub!2026"},
+    )
+
+    assert response.status_code == 200
+    cookie = response.headers.get("set-cookie")
+    assert cookie is not None
+    assert "dancehub_access_token=" in cookie
+    assert "httponly" in cookie.lower()
+    assert "samesite=lax" in cookie.lower()
+    assert "secure" in cookie.lower()
+    assert "max-age=900" in cookie.lower()
+    assert "access_token" not in response.json()
+
+
+def test_login_issues_http_only_refresh_cookie(registration_client):
+    client, _ = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "DanceHub!2026"},
+    )
+
+    assert response.status_code == 200
+    cookie = response.headers.get("set-cookie", "").lower()
+    assert "dancehub_refresh_token=" in cookie
+    assert "httponly" in cookie
+    assert "samesite=lax" in cookie
+    assert "secure" in cookie
+    assert "max-age=604800" in cookie
+
+
+def test_refresh_rotates_token_and_slides_session_expiry(registration_client):
+    client, _ = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "DanceHub!2026"},
+    )
+    assert login.status_code == 200
+    original_refresh_token = client.cookies.get("dancehub_refresh_token")
+
+    refreshed = client.post("/api/auth/refresh")
+
+    assert refreshed.status_code == 200
+    rotated_refresh_token = refreshed.cookies.get("dancehub_refresh_token")
+    assert rotated_refresh_token
+    assert rotated_refresh_token != original_refresh_token
+    refresh_cookie = next(
+        value
+        for value in refreshed.headers.get_list("set-cookie")
+        if "dancehub_refresh_token=" in value
+    )
+    assert "max-age=604800" in refresh_cookie.lower()
+    with TestClient(
+        client.app,
+        base_url="https://testserver",
+        cookies={"dancehub_refresh_token": original_refresh_token},
+    ) as replay_client:
+        replay = replay_client.post("/api/auth/refresh")
+    assert replay.status_code == 401
+
+
+def test_expired_refresh_token_is_rejected(registration_client):
+    client, engine = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "DanceHub!2026"},
+    )
+    assert login.status_code == 200
+    refresh_token = client.cookies.get("dancehub_refresh_token")
+    token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE refresh_sessions SET expires_at = '2000-01-01 00:00:00' "
+                "WHERE token_hash = :token_hash"
+            ),
+            {"token_hash": token_hash},
+        )
+
+    response = client.post("/api/auth/refresh")
+
+    assert response.status_code == 401
+
+
+def test_backend_sign_out_revokes_refresh_session_and_clears_cookies(
+    registration_client,
+):
+    client, _ = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "DanceHub!2026"},
+    )
+    assert login.status_code == 200
+    access_token = client.cookies.get("dancehub_access_token")
+    refresh_token = client.cookies.get("dancehub_refresh_token")
+
+    signed_out = client.post("/api/auth/logout")
+
+    assert signed_out.status_code == 200
+    cleared_cookies = signed_out.headers.get_list("set-cookie")
+    assert any(
+        "dancehub_access_token=" in cookie and "max-age=0" in cookie.lower()
+        for cookie in cleared_cookies
+    )
+    assert any(
+        "dancehub_refresh_token=" in cookie and "max-age=0" in cookie.lower()
+        for cookie in cleared_cookies
+    )
+    with TestClient(
+        client.app,
+        base_url="https://testserver",
+        cookies={"dancehub_refresh_token": refresh_token},
+    ) as replay_client:
+        replay = replay_client.post("/api/auth/refresh")
+    assert replay.status_code == 401
+    with TestClient(
+        client.app,
+        base_url="https://testserver",
+        cookies={"dancehub_access_token": access_token},
+    ) as signed_out_client:
+        profile = signed_out_client.get("/api/auth/me")
+    assert profile.status_code == 401
+
+
+def test_login_returns_same_generic_error_for_invalid_credentials(registration_client):
+    client, _ = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+
+    wrong_password = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "wrong-password"},
+    )
+    unknown_email = client.post(
+        "/api/auth/login",
+        json={"email": "unknown@example.com", "password": "wrong-password"},
+    )
+
+    expected_error = {"detail": "Email or password is incorrect."}
+    assert wrong_password.status_code == 401
+    assert unknown_email.status_code == 401
+    assert wrong_password.json() == expected_error
+    assert unknown_email.json() == expected_error
+
+
+def test_valid_access_cookie_restores_profile_after_reload(registration_client):
+    client, _ = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "DanceHub!2026"},
+    )
+
+    assert response.status_code == 200
+    with TestClient(
+        client.app, base_url="https://testserver", cookies=client.cookies
+    ) as refreshed_client:
+        session = refreshed_client.get("/api/auth/me")
+    assert session.status_code == 200
+    assert session.json() == {
+        "name": "Jamie Chen",
+        "email": "jamie@example.com",
+        "academy_name": "Acme Dance Academy",
+    }

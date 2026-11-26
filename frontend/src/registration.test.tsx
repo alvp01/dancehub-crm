@@ -70,6 +70,9 @@ test("registration form submits details and displays server errors and success",
   await act(async () => {
     form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 
   expect(http.post).toHaveBeenCalledWith(
     "/api/operator/registration",
@@ -86,6 +89,9 @@ test("registration form submits details and displays server errors and success",
 
   await act(async () => {
     form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
   expect(container.textContent).toContain("Academy registered");
 
