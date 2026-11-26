@@ -162,3 +162,34 @@ def test_rejects_passwords_failing_each_specified_rule_with_actionable_errors(
     with engine.connect() as connection:
         assert connection.execute(text("SELECT COUNT(*) FROM academies")).scalar_one() == 0
         assert connection.execute(text("SELECT COUNT(*) FROM administrators")).scalar_one() == 0
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [],
+        [(b"X-Operator-Secret", b"wrong-secret")],
+        [(b"X-Operator-Secret", b"\xe9")],
+    ],
+    ids=["missing", "incorrect", "non-ascii"],
+)
+def test_denies_registration_without_a_valid_operator_secret(
+    registration_client, headers
+):
+    client, engine = registration_client
+    response = client.post(
+        "/api/operator/registration",
+        headers=headers,
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+
+    assert response.status_code == 403
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT COUNT(*) FROM academies")).scalar_one() == 0
+        assert connection.execute(text("SELECT COUNT(*) FROM administrators")).scalar_one() == 0

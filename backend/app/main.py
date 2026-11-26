@@ -65,7 +65,8 @@ def register_academy(
     operator_secret: str | None = Header(default=None, alias="X-Operator-Secret"),
 ) -> dict[str, dict[str, str]]:
     if not settings.operator_secret or not secrets.compare_digest(
-        operator_secret or "", settings.operator_secret
+        (operator_secret or "").encode("utf-8"),
+        settings.operator_secret.encode("utf-8"),
     ):
         raise HTTPException(status_code=403, detail="Access denied")
 
