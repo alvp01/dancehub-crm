@@ -17,6 +17,7 @@ def registration_client(tmp_path, monkeypatch):
     with monkeypatch.context() as environment:
         environment.setenv("DATABASE_URL", database_url)
         environment.setenv("OPERATOR_SECRET", "test-operator-secret")
+        environment.setenv("JWT_SECRET", "test-jwt-secret-with-32-bytes-minimum")
         get_settings.cache_clear()
 
         import app.db
@@ -28,7 +29,7 @@ def registration_client(tmp_path, monkeypatch):
         command.upgrade(Config(str(config_path)), "head")
         engine = create_engine(database_url)
 
-        with TestClient(main_module.app) as client:
+        with TestClient(main_module.app, base_url="https://testserver") as client:
             yield client, engine
 
         engine.dispose()
@@ -193,3 +194,67 @@ def test_denies_registration_without_a_valid_operator_secret(
     with engine.connect() as connection:
         assert connection.execute(text("SELECT COUNT(*) FROM academies")).scalar_one() == 0
         assert connection.execute(text("SELECT COUNT(*) FROM administrators")).scalar_one() == 0
+
+
+def test_login_sets_http_only_access_jwt_cookie(registration_client):
+    client, _ = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "DanceHub!2026"},
+    )
+
+    assert response.status_code == 200
+    cookie = response.headers.get("set-cookie")
+    assert cookie is not None
+    assert "dancehub_access_token=" in cookie
+    assert "httponly" in cookie.lower()
+    assert "samesite=lax" in cookie.lower()
+    assert "secure" in cookie.lower()
+    assert "max-age=900" in cookie.lower()
+    assert "access_token" not in response.json()
+
+
+def test_valid_access_cookie_restores_profile_after_reload(registration_client):
+    client, _ = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "DanceHub!2026"},
+    )
+
+    assert response.status_code == 200
+    with TestClient(
+        client.app, base_url="https://testserver", cookies=client.cookies
+    ) as refreshed_client:
+        session = refreshed_client.get("/api/auth/me")
+    assert session.status_code == 200
+    assert session.json() == {
+        "name": "Jamie Chen",
+        "email": "jamie@example.com",
+        "academy_name": "Acme Dance Academy",
+    }

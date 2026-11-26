@@ -1,19 +1,27 @@
 import hashlib
+import hmac
 import secrets
 import time
 from uuid import UUID
 
-from fastapi import FastAPI
+import jwt
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Header, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
 
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import Academy, Administrator
 
 settings = get_settings()
+JWT_SIGNING_KEY = settings.jwt_secret or secrets.token_urlsafe(32)
+JWT_ISSUER = "dancehub-crm-api"
+JWT_AUDIENCE = "dancehub-crm"
+ACCESS_TOKEN_LIFETIME_SECONDS = 900
 app = FastAPI(title="DanceHub CRM API")
 
 app.add_middleware(
@@ -38,6 +46,17 @@ class RegistrationRequest(BaseModel):
     administrator_password: str
 
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AdministratorSession(BaseModel):
+    name: str
+    email: str
+    academy_name: str
+
+
 def _uuid7() -> str:
     timestamp = time.time_ns() // 1_000_000
     random_a = secrets.randbits(12)
@@ -57,6 +76,112 @@ def _hash_password(password: str) -> str:
     iterations = 600_000
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
     return f"pbkdf2_sha256${iterations}${salt.hex()}${digest.hex()}"
+
+
+def _verify_password(password: str, encoded_hash: str) -> bool:
+    try:
+        algorithm, iterations, salt, digest = encoded_hash.split("$")
+        if algorithm != "pbkdf2_sha256":
+            return False
+        calculated = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), bytes.fromhex(salt), int(iterations)
+        )
+        return hmac.compare_digest(calculated, bytes.fromhex(digest))
+    except ValueError:
+        return False
+
+
+_DUMMY_PASSWORD_HASH = _hash_password(secrets.token_urlsafe(32))
+
+
+@app.post("/api/auth/login")
+def login(
+    credentials: LoginRequest, request: Request, response: Response
+) -> dict[str, str]:
+    with SessionLocal() as session:
+        administrator = session.scalar(
+            select(Administrator).where(Administrator.email == credentials.email)
+        )
+        password_hash = (
+            administrator.password_hash if administrator else _DUMMY_PASSWORD_HASH
+        )
+        password_is_valid = _verify_password(credentials.password, password_hash)
+
+    if administrator is None or not password_is_valid:
+        raise HTTPException(
+            status_code=401,
+            detail="Email or password is incorrect.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    now = int(time.time())
+    access_token = jwt.encode(
+        {
+            "sub": administrator.id,
+            "iss": JWT_ISSUER,
+            "aud": JWT_AUDIENCE,
+            "iat": now,
+            "exp": now + ACCESS_TOKEN_LIFETIME_SECONDS,
+            "jti": secrets.token_urlsafe(16),
+        },
+        JWT_SIGNING_KEY,
+        algorithm="HS256",
+    )
+    response.set_cookie(
+        key="dancehub_access_token",
+        value=access_token,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        max_age=ACCESS_TOKEN_LIFETIME_SECONDS,
+        path="/api",
+    )
+    return {"message": "Signed in."}
+
+
+def _get_administrator_session(request: Request) -> AdministratorSession:
+    access_token = request.cookies.get("dancehub_access_token")
+    if not access_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign-in required.",
+        )
+    try:
+        claims = jwt.decode(
+            access_token,
+            JWT_SIGNING_KEY,
+            algorithms=["HS256"],
+            audience=JWT_AUDIENCE,
+            issuer=JWT_ISSUER,
+            options={"require": ["sub", "exp", "iat", "jti"]},
+        )
+    except jwt.InvalidTokenError as error:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired access token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from error
+
+    with SessionLocal() as session:
+        administrator = session.scalar(
+            select(Administrator)
+            .options(joinedload(Administrator.academy))
+            .where(Administrator.id == claims["sub"])
+        )
+        if administrator is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired access token.")
+        return AdministratorSession(
+            name=administrator.name,
+            email=administrator.email,
+            academy_name=administrator.academy.name,
+        )
+
+
+@app.get("/api/auth/me", response_model=AdministratorSession)
+def get_current_administrator(
+    administrator: AdministratorSession = Depends(_get_administrator_session),
+) -> AdministratorSession:
+    return administrator
 
 
 @app.post("/api/operator/registration", status_code=201)

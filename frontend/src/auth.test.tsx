@@ -1,0 +1,182 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, expect, test, vi } from "vitest";
+
+import App from "./App";
+import SignInForm from "./SignInForm";
+
+const http = vi.hoisted(() => ({
+  get: vi.fn(),
+  post: vi.fn(),
+  config: undefined as unknown
+}));
+
+vi.mock("axios", () => ({
+  default: {
+    create: (config: unknown) => {
+      http.config = config;
+      return http;
+    },
+    isAxiosError: (error: unknown) =>
+      typeof error === "object" && error !== null && "isAxiosError" in error
+  }
+}));
+
+afterEach(() => {
+  vi.clearAllMocks();
+  document.body.innerHTML = "";
+  window.history.replaceState({}, "", "/");
+});
+
+test("frontend_auth_requests_send_cookies", () => {
+  expect(http.config).toMatchObject({ withCredentials: true });
+});
+
+test("app_restores_crm_home_after_browser_reload_with_valid_cookie", async () => {
+  document.body.innerHTML = '<div id="root"></div>';
+  const container = document.getElementById("root")!;
+  const root = createRoot(container);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } }
+  });
+  http.get.mockResolvedValueOnce({
+    data: {
+      name: "Jamie Chen",
+      email: "jamie@example.com",
+      academy_name: "Acme Dance Academy"
+    }
+  });
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    );
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(container.textContent).toContain("Acme Dance Academy");
+  expect(container.textContent).toContain("Jamie Chen");
+
+  await act(async () => root.unmount());
+});
+
+test("signed_out_app_renders_email_and_password_fields", async () => {
+  document.body.innerHTML = '<div id="root"></div>';
+  const container = document.getElementById("root")!;
+  const root = createRoot(container);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } }
+  });
+  http.get.mockRejectedValueOnce({
+    isAxiosError: true,
+    response: { status: 401 }
+  });
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(container.querySelector('input[type="email"]')).not.toBeNull();
+  expect(container.querySelector('input[type="password"]')).not.toBeNull();
+
+  await act(async () => root.unmount());
+});
+
+test("sign_in_form_submits_credentials_and_returns_administrator_session", async () => {
+  document.body.innerHTML = '<div id="root"></div>';
+  const container = document.getElementById("root")!;
+  const root = createRoot(container);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } }
+  });
+  const administrator = {
+    name: "Jamie Chen",
+    email: "jamie@example.com",
+    academy_name: "Acme Dance Academy"
+  };
+  const onSignIn = vi.fn();
+  http.post.mockResolvedValueOnce({
+    data: { access_token: "signed-token", token_type: "bearer", expires_in: 900 }
+  });
+  http.get.mockResolvedValueOnce({ data: administrator });
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <SignInForm onSignIn={onSignIn} />
+      </QueryClientProvider>
+    );
+  });
+
+  (document.getElementById("email") as HTMLInputElement).value = "jamie@example.com";
+  (document.getElementById("password") as HTMLInputElement).value = "DanceHub!2026";
+  await act(async () => {
+    container.querySelector("form")!.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true })
+    );
+  });
+
+  expect(http.post).toHaveBeenCalledWith("/api/auth/login", {
+    email: "jamie@example.com",
+    password: "DanceHub!2026"
+  });
+  expect(http.get).toHaveBeenCalledWith("/api/auth/me", {
+    headers: { Authorization: "Bearer signed-token" }
+  });
+  expect(onSignIn).toHaveBeenCalledWith(administrator);
+
+  await act(async () => root.unmount());
+});
+
+test("successful_sign_in_displays_crm_home", async () => {
+  document.body.innerHTML = '<div id="root"></div>';
+  const container = document.getElementById("root")!;
+  const root = createRoot(container);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } }
+  });
+  http.post.mockResolvedValueOnce({
+    data: { access_token: "signed-token", token_type: "bearer", expires_in: 900 }
+  });
+  http.get
+    .mockRejectedValueOnce({ isAxiosError: true, response: { status: 401 } })
+    .mockResolvedValueOnce({
+      data: {
+        name: "Jamie Chen",
+        email: "jamie@example.com",
+        academy_name: "Acme Dance Academy"
+      }
+    })
+    .mockResolvedValueOnce({ data: { message: "Backend is running" } });
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    );
+  });
+  (document.getElementById("email") as HTMLInputElement).value = "jamie@example.com";
+  (document.getElementById("password") as HTMLInputElement).value = "DanceHub!2026";
+  await act(async () => {
+    container.querySelector("form")!.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(container.textContent).toContain("Acme Dance Academy");
+  expect(container.textContent).toContain("Jamie Chen");
+
+  await act(async () => root.unmount());
+});
