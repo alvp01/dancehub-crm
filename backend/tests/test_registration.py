@@ -241,6 +241,77 @@ def test_login_sets_http_only_access_jwt_cookie(registration_client):
     assert "access_token" not in response.json()
 
 
+def test_login_issues_http_only_refresh_cookie(registration_client):
+    client, _ = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "DanceHub!2026"},
+    )
+
+    assert response.status_code == 200
+    cookie = response.headers.get("set-cookie", "").lower()
+    assert "dancehub_refresh_token=" in cookie
+    assert "httponly" in cookie
+    assert "samesite=lax" in cookie
+    assert "secure" in cookie
+    assert "max-age=604800" in cookie
+
+
+def test_refresh_rotates_token_and_slides_session_expiry(registration_client):
+    client, _ = registration_client
+    registration = client.post(
+        "/api/operator/registration",
+        headers={"X-Operator-Secret": "test-operator-secret"},
+        json={
+            "academy_name": "Acme Dance Academy",
+            "academy_phone": "+1-555-555-0100",
+            "administrator_name": "Jamie Chen",
+            "administrator_email": "jamie@example.com",
+            "administrator_password": "DanceHub!2026",
+        },
+    )
+    assert registration.status_code == 201
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "jamie@example.com", "password": "DanceHub!2026"},
+    )
+    assert login.status_code == 200
+    original_refresh_token = client.cookies.get("dancehub_refresh_token")
+
+    refreshed = client.post("/api/auth/refresh")
+
+    assert refreshed.status_code == 200
+    rotated_refresh_token = refreshed.cookies.get("dancehub_refresh_token")
+    assert rotated_refresh_token
+    assert rotated_refresh_token != original_refresh_token
+    refresh_cookie = next(
+        value
+        for value in refreshed.headers.get_list("set-cookie")
+        if "dancehub_refresh_token=" in value
+    )
+    assert "max-age=604800" in refresh_cookie.lower()
+    with TestClient(
+        client.app,
+        base_url="https://testserver",
+        cookies={"dancehub_refresh_token": original_refresh_token},
+    ) as replay_client:
+        replay = replay_client.post("/api/auth/refresh")
+    assert replay.status_code == 401
+
+
 def test_login_returns_same_generic_error_for_invalid_credentials(registration_client):
     client, _ = registration_client
     registration = client.post(
