@@ -21,6 +21,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://dancehub:dancehub@db:5432/dancehub
       CORS_ORIGINS: http://localhost:5173
+      OPERATOR_SECRET: ${OPERATOR_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
