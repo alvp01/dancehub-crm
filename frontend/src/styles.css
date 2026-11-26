@@ -39,3 +39,55 @@ section {
   background: white;
   box-shadow: 0 1rem 3rem rgb(63 46 141 / 0.12);
 }
+
+.registration {
+  place-content: start center;
+}
+
+.registration h1 {
+  font-size: clamp(2rem, 5vw, 3rem);
+}
+
+.registration form {
+  display: grid;
+  gap: 0.5rem;
+  width: min(100%, 30rem);
+}
+
+.registration label {
+  margin-top: 0.5rem;
+  font-weight: 600;
+}
+
+.registration input,
+.registration button {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #dcd5ff;
+  border-radius: 0.5rem;
+  font: inherit;
+}
+
+.registration button {
+  margin-top: 0.5rem;
+  border-color: #6d4aff;
+  background: #6d4aff;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.registration button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.registration :focus-visible {
+  outline: 3px solid #6d4aff;
+  outline-offset: 3px;
+}
+
+.registration p {
+  margin: 0.25rem 0;
+}

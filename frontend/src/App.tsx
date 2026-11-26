@@ -1,9 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { fetchHealthMessage } from "./api";
+import RegistrationForm from "./RegistrationForm";
 import { useAppStore } from "./store";
 
 export default function App() {
+  if (window.location.pathname === "/operator/register") {
+    return <RegistrationForm />;
+  }
+
+  return <Home />;
+}
+
+function Home() {
   const academyName = useAppStore((state) => state.academyName);
   const healthQuery = useQuery({
     queryKey: ["health-message"],
