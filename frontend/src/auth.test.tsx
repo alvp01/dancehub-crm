@@ -82,6 +82,46 @@ test("app_restores_crm_home_after_browser_reload_with_valid_cookie", async () =>
   await act(async () => root.unmount());
 });
 
+test("app_restores_session_after_reload_with_valid_refresh_cookie", async () => {
+  document.body.innerHTML = '<div id="root"></div>';
+  const container = document.getElementById("root")!;
+  const root = createRoot(container);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } }
+  });
+  http.get
+    .mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status: 401 }
+    })
+    .mockResolvedValueOnce({
+      data: {
+        name: "Jamie Chen",
+        email: "jamie@example.com",
+        academy_name: "Acme Dance Academy"
+      }
+    })
+    .mockResolvedValueOnce({ data: { message: "Backend is running" } });
+  http.post.mockResolvedValueOnce({ data: { message: "Session renewed." } });
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    );
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(http.post).toHaveBeenCalledWith("/api/auth/refresh");
+  expect(container.textContent).toContain("Acme Dance Academy");
+  expect(container.textContent).toContain("Jamie Chen");
+
+  await act(async () => root.unmount());
+});
+
 test("signed_out_app_renders_email_and_password_fields", async () => {
   document.body.innerHTML = '<div id="root"></div>';
   const container = document.getElementById("root")!;
