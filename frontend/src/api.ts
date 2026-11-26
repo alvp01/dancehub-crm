@@ -40,6 +40,10 @@ export async function signInAdministrator(credentials: {
   return session;
 }
 
+export async function signOutAdministrator(): Promise<void> {
+  await client.post("/api/auth/logout");
+}
+
 export interface RegistrationDetails {
   academy_name: string;
   academy_phone: string;

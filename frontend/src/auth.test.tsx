@@ -220,3 +220,47 @@ test("successful_sign_in_displays_crm_home", async () => {
 
   await act(async () => root.unmount());
 });
+
+test("signed_in_app_sign_out_returns_to_sign_in", async () => {
+  document.body.innerHTML = '<div id="root"></div>';
+  const container = document.getElementById("root")!;
+  const root = createRoot(container);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } }
+  });
+  http.get
+    .mockResolvedValueOnce({
+      data: {
+        name: "Jamie Chen",
+        email: "jamie@example.com",
+        academy_name: "Acme Dance Academy"
+      }
+    })
+    .mockResolvedValueOnce({ data: { message: "Backend is running" } });
+  http.post.mockResolvedValueOnce({ data: { message: "Signed out." } });
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    );
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  const signOutButton = Array.from(container.querySelectorAll("button")).find(
+    (button) => button.textContent?.trim() === "Sign out"
+  );
+  expect(signOutButton).toBeDefined();
+  await act(async () => {
+    signOutButton!.dispatchEvent(new Event("click", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(http.post).toHaveBeenCalledWith("/api/auth/logout");
+  expect(container.textContent).toContain("Sign in to DanceHub");
+
+  await act(async () => root.unmount());
+});
