@@ -1,5 +1,6 @@
 import hashlib
 import importlib
+import time
 from pathlib import Path
 from uuid import UUID
 
@@ -9,7 +10,16 @@ from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
-from app.config import get_settings
+from app.core.config import get_settings
+
+
+def wait_for_database_ready(client):
+    ready_deadline = time.monotonic() + 5
+    while time.monotonic() < ready_deadline:
+        if client.get("/api/v1/ready").status_code == 200:
+            return
+        time.sleep(0.02)
+    raise AssertionError("Database did not become ready in time.")
 
 
 @pytest.fixture
@@ -21,16 +31,37 @@ def registration_client(tmp_path, monkeypatch):
         environment.setenv("JWT_SECRET", "test-jwt-secret-with-32-bytes-minimum")
         get_settings.cache_clear()
 
-        import app.db
+        import app.db.database
+        import app.db.lifecycle
         import app.main
+        import app.models
+        import app.models.academy
+        import app.models.administrator
+        import app.models.refresh_session
+        import app.routers.api
+        import app.routers.auth
+        import app.routers.operator
+        import app.services.auth_service
+        import app.services.registration_service
 
-        importlib.reload(app.db)
+        importlib.reload(app.db.database)
+        importlib.reload(app.db.lifecycle)
+        importlib.reload(app.models.academy)
+        importlib.reload(app.models.administrator)
+        importlib.reload(app.models.refresh_session)
+        importlib.reload(app.models)
+        importlib.reload(app.services.auth_service)
+        importlib.reload(app.services.registration_service)
+        importlib.reload(app.routers.auth)
+        importlib.reload(app.routers.operator)
+        importlib.reload(app.routers.api)
         main_module = importlib.reload(app.main)
         config_path = Path(__file__).resolve().parents[1] / "alembic.ini"
         command.upgrade(Config(str(config_path)), "head")
         engine = create_engine(database_url)
 
         with TestClient(main_module.app, base_url="https://testserver") as client:
+            wait_for_database_ready(client)
             yield client, engine
 
         engine.dispose()
@@ -42,7 +73,7 @@ def test_registers_academy_and_first_administrator_atomically_with_operator_secr
 ):
     client, engine = registration_client
     response = client.post(
-        "/api/operator/registration",
+        "/api/v1/operator/registration",
         headers={"X-Operator-Secret": "test-operator-secret"},
         json={
             "academy_name": "Acme Dance Academy",
@@ -95,7 +126,7 @@ def test_rejects_case_insensitive_academy_name_phone_and_administrator_email_dup
 
     assert (
         client.post(
-            "/api/operator/registration", headers=headers, json=original
+            "/api/v1/operator/registration", headers=headers, json=original
         ).status_code
         == 201
     )
@@ -121,7 +152,7 @@ def test_rejects_case_insensitive_academy_name_phone_and_administrator_email_dup
 
     for duplicate in duplicates:
         response = client.post(
-            "/api/operator/registration", headers=headers, json=duplicate
+            "/api/v1/operator/registration", headers=headers, json=duplicate
         )
         assert response.status_code == 409
 
@@ -162,7 +193,7 @@ def test_rejects_passwords_failing_each_specified_rule_with_actionable_errors(
 ):
     client, engine = registration_client
     response = client.post(
-        "/api/operator/registration",
+        "/api/v1/operator/registration",
         headers={"X-Operator-Secret": "test-operator-secret"},
         json={
             "academy_name": "Acme Dance Academy",
@@ -194,7 +225,7 @@ def test_denies_registration_without_a_valid_operator_secret(
 ):
     client, engine = registration_client
     response = client.post(
-        "/api/operator/registration",
+        "/api/v1/operator/registration",
         headers=headers,
         json={
             "academy_name": "Acme Dance Academy",
@@ -214,7 +245,7 @@ def test_denies_registration_without_a_valid_operator_secret(
 def test_login_sets_http_only_access_jwt_cookie(registration_client):
     client, _ = registration_client
     registration = client.post(
-        "/api/operator/registration",
+        "/api/v1/operator/registration",
         headers={"X-Operator-Secret": "test-operator-secret"},
         json={
             "academy_name": "Acme Dance Academy",
@@ -227,7 +258,7 @@ def test_login_sets_http_only_access_jwt_cookie(registration_client):
     assert registration.status_code == 201
 
     response = client.post(
-        "/api/auth/login",
+        "/api/v1/auth/login",
         json={"email": "jamie@example.com", "password": "DanceHub!2026"},
     )
 
@@ -245,7 +276,7 @@ def test_login_sets_http_only_access_jwt_cookie(registration_client):
 def test_login_issues_http_only_refresh_cookie(registration_client):
     client, _ = registration_client
     registration = client.post(
-        "/api/operator/registration",
+        "/api/v1/operator/registration",
         headers={"X-Operator-Secret": "test-operator-secret"},
         json={
             "academy_name": "Acme Dance Academy",
@@ -258,7 +289,7 @@ def test_login_issues_http_only_refresh_cookie(registration_client):
     assert registration.status_code == 201
 
     response = client.post(
-        "/api/auth/login",
+        "/api/v1/auth/login",
         json={"email": "jamie@example.com", "password": "DanceHub!2026"},
     )
 
@@ -274,7 +305,7 @@ def test_login_issues_http_only_refresh_cookie(registration_client):
 def test_refresh_rotates_token_and_slides_session_expiry(registration_client):
     client, _ = registration_client
     registration = client.post(
-        "/api/operator/registration",
+        "/api/v1/operator/registration",
         headers={"X-Operator-Secret": "test-operator-secret"},
         json={
             "academy_name": "Acme Dance Academy",
@@ -286,13 +317,13 @@ def test_refresh_rotates_token_and_slides_session_expiry(registration_client):
     )
     assert registration.status_code == 201
     login = client.post(
-        "/api/auth/login",
+        "/api/v1/auth/login",
         json={"email": "jamie@example.com", "password": "DanceHub!2026"},
     )
     assert login.status_code == 200
     original_refresh_token = client.cookies.get("dancehub_refresh_token")
 
-    refreshed = client.post("/api/auth/refresh")
+    refreshed = client.post("/api/v1/auth/refresh")
 
     assert refreshed.status_code == 200
     rotated_refresh_token = refreshed.cookies.get("dancehub_refresh_token")
@@ -304,19 +335,19 @@ def test_refresh_rotates_token_and_slides_session_expiry(registration_client):
         if "dancehub_refresh_token=" in value
     )
     assert "max-age=604800" in refresh_cookie.lower()
-    with TestClient(
+    replay_client = TestClient(
         client.app,
         base_url="https://testserver",
         cookies={"dancehub_refresh_token": original_refresh_token},
-    ) as replay_client:
-        replay = replay_client.post("/api/auth/refresh")
+    )
+    replay = replay_client.post("/api/v1/auth/refresh")
     assert replay.status_code == 401
 
 
 def test_expired_refresh_token_is_rejected(registration_client):
     client, engine = registration_client
     registration = client.post(
-        "/api/operator/registration",
+        "/api/v1/operator/registration",
         headers={"X-Operator-Secret": "test-operator-secret"},
         json={
             "academy_name": "Acme Dance Academy",
@@ -328,7 +359,7 @@ def test_expired_refresh_token_is_rejected(registration_client):
     )
     assert registration.status_code == 201
     login = client.post(
-        "/api/auth/login",
+        "/api/v1/auth/login",
         json={"email": "jamie@example.com", "password": "DanceHub!2026"},
     )
     assert login.status_code == 200
@@ -344,7 +375,7 @@ def test_expired_refresh_token_is_rejected(registration_client):
             {"token_hash": token_hash},
         )
 
-    response = client.post("/api/auth/refresh")
+    response = client.post("/api/v1/auth/refresh")
 
     assert response.status_code == 401
 
@@ -354,7 +385,7 @@ def test_backend_sign_out_revokes_refresh_session_and_clears_cookies(
 ):
     client, _ = registration_client
     registration = client.post(
-        "/api/operator/registration",
+        "/api/v1/operator/registration",
         headers={"X-Operator-Secret": "test-operator-secret"},
         json={
             "academy_name": "Acme Dance Academy",
@@ -366,14 +397,14 @@ def test_backend_sign_out_revokes_refresh_session_and_clears_cookies(
     )
     assert registration.status_code == 201
     login = client.post(
-        "/api/auth/login",
+        "/api/v1/auth/login",
         json={"email": "jamie@example.com", "password": "DanceHub!2026"},
     )
     assert login.status_code == 200
     access_token = client.cookies.get("dancehub_access_token")
     refresh_token = client.cookies.get("dancehub_refresh_token")
 
-    signed_out = client.post("/api/auth/logout")
+    signed_out = client.post("/api/v1/auth/logout")
 
     assert signed_out.status_code == 200
     cleared_cookies = signed_out.headers.get_list("set-cookie")
@@ -385,26 +416,26 @@ def test_backend_sign_out_revokes_refresh_session_and_clears_cookies(
         "dancehub_refresh_token=" in cookie and "max-age=0" in cookie.lower()
         for cookie in cleared_cookies
     )
-    with TestClient(
+    replay_client = TestClient(
         client.app,
         base_url="https://testserver",
         cookies={"dancehub_refresh_token": refresh_token},
-    ) as replay_client:
-        replay = replay_client.post("/api/auth/refresh")
+    )
+    replay = replay_client.post("/api/v1/auth/refresh")
     assert replay.status_code == 401
-    with TestClient(
+    signed_out_client = TestClient(
         client.app,
         base_url="https://testserver",
         cookies={"dancehub_access_token": access_token},
-    ) as signed_out_client:
-        profile = signed_out_client.get("/api/auth/me")
+    )
+    profile = signed_out_client.get("/api/v1/auth/me")
     assert profile.status_code == 401
 
 
 def test_login_returns_same_generic_error_for_invalid_credentials(registration_client):
     client, _ = registration_client
     registration = client.post(
-        "/api/operator/registration",
+        "/api/v1/operator/registration",
         headers={"X-Operator-Secret": "test-operator-secret"},
         json={
             "academy_name": "Acme Dance Academy",
@@ -417,11 +448,11 @@ def test_login_returns_same_generic_error_for_invalid_credentials(registration_c
     assert registration.status_code == 201
 
     wrong_password = client.post(
-        "/api/auth/login",
+        "/api/v1/auth/login",
         json={"email": "jamie@example.com", "password": "wrong-password"},
     )
     unknown_email = client.post(
-        "/api/auth/login",
+        "/api/v1/auth/login",
         json={"email": "unknown@example.com", "password": "wrong-password"},
     )
 
@@ -435,7 +466,7 @@ def test_login_returns_same_generic_error_for_invalid_credentials(registration_c
 def test_valid_access_cookie_restores_profile_after_reload(registration_client):
     client, _ = registration_client
     registration = client.post(
-        "/api/operator/registration",
+        "/api/v1/operator/registration",
         headers={"X-Operator-Secret": "test-operator-secret"},
         json={
             "academy_name": "Acme Dance Academy",
@@ -448,15 +479,15 @@ def test_valid_access_cookie_restores_profile_after_reload(registration_client):
     assert registration.status_code == 201
 
     response = client.post(
-        "/api/auth/login",
+        "/api/v1/auth/login",
         json={"email": "jamie@example.com", "password": "DanceHub!2026"},
     )
 
     assert response.status_code == 200
-    with TestClient(
+    refreshed_client = TestClient(
         client.app, base_url="https://testserver", cookies=client.cookies
-    ) as refreshed_client:
-        session = refreshed_client.get("/api/auth/me")
+    )
+    session = refreshed_client.get("/api/v1/auth/me")
     assert session.status_code == 200
     assert session.json() == {
         "name": "Jamie Chen",

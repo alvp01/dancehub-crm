@@ -6,7 +6,7 @@ const client = axios.create({
 });
 
 export async function fetchHealthMessage(): Promise<string> {
-  const message = await getWithSessionRefresh<{ message: string }>("/api/health");
+  const message = await getWithSessionRefresh<{ message: string }>("/api/v1/health");
   return message.message;
 }
 
@@ -18,7 +18,7 @@ async function getWithSessionRefresh<T>(url: string): Promise<T> {
     if (!axios.isAxiosError(error) || error.response?.status !== 401) {
       throw error;
     }
-    await client.post("/api/auth/refresh");
+    await client.post("/api/v1/auth/refresh");
     const response = await client.get<T>(url);
     return response.data;
   }
@@ -32,7 +32,7 @@ export interface AdministratorSession {
 
 export async function fetchAdministratorSession(): Promise<AdministratorSession | null> {
   try {
-    return await getWithSessionRefresh<AdministratorSession>("/api/auth/me");
+    return await getWithSessionRefresh<AdministratorSession>("/api/v1/auth/me");
   } catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 401) {
       return null;
@@ -45,7 +45,7 @@ export async function signInAdministrator(credentials: {
   email: string;
   password: string;
 }): Promise<AdministratorSession> {
-  await client.post("/api/auth/login", credentials);
+  await client.post("/api/v1/auth/login", credentials);
   const session = await fetchAdministratorSession();
   if (!session) {
     throw new Error("Sign-in did not establish an administrator session.");
@@ -54,7 +54,7 @@ export async function signInAdministrator(credentials: {
 }
 
 export async function signOutAdministrator(): Promise<void> {
-  await client.post("/api/auth/logout");
+  await client.post("/api/v1/auth/logout");
 }
 
 export interface RegistrationDetails {
@@ -69,7 +69,7 @@ export async function registerAcademy(
   details: RegistrationDetails,
   operatorSecret: string
 ): Promise<void> {
-  await client.post("/api/operator/registration", details, {
+  await client.post("/api/v1/operator/registration", details, {
     headers: { "X-Operator-Secret": operatorSecret }
   });
 }

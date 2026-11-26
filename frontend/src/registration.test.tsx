@@ -75,7 +75,7 @@ test("registration form submits details and displays server errors and success",
   });
 
   expect(http.post).toHaveBeenCalledWith(
-    "/api/operator/registration",
+    "/api/v1/operator/registration",
     {
       academy_name: "Acme Dance Academy",
       academy_phone: "+1-555-555-0100",

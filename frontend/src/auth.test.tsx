@@ -45,9 +45,9 @@ test("app_renews_expired_access_and_retries_request", async () => {
 
   await expect(fetchHealthMessage()).resolves.toBe("DanceHub CRM is ready");
 
-  expect(http.post).toHaveBeenCalledWith("/api/auth/refresh");
+  expect(http.post).toHaveBeenCalledWith("/api/v1/auth/refresh");
   expect(http.get).toHaveBeenCalledTimes(2);
-  expect(http.get).toHaveBeenLastCalledWith("/api/health");
+  expect(http.get).toHaveBeenLastCalledWith("/api/v1/health");
 });
 
 test("app_restores_crm_home_after_browser_reload_with_valid_cookie", async () => {
@@ -115,7 +115,7 @@ test("app_restores_session_after_reload_with_valid_refresh_cookie", async () => 
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
-  expect(http.post).toHaveBeenCalledWith("/api/auth/refresh");
+  expect(http.post).toHaveBeenCalledWith("/api/v1/auth/refresh");
   expect(container.textContent).toContain("Acme Dance Academy");
   expect(container.textContent).toContain("Jamie Chen");
 
@@ -187,11 +187,11 @@ test("sign_in_form_submits_credentials_and_returns_administrator_session", async
     );
   });
 
-  expect(http.post).toHaveBeenCalledWith("/api/auth/login", {
+  expect(http.post).toHaveBeenCalledWith("/api/v1/auth/login", {
     email: "jamie@example.com",
     password: "DanceHub!2026"
   });
-  expect(http.get).toHaveBeenCalledWith("/api/auth/me");
+  expect(http.get).toHaveBeenCalledWith("/api/v1/auth/me");
   expect(onSignIn).toHaveBeenCalledWith(administrator);
 
   await act(async () => root.unmount());
@@ -321,7 +321,7 @@ test("signed_in_app_sign_out_returns_to_sign_in", async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
-  expect(http.post).toHaveBeenCalledWith("/api/auth/logout");
+  expect(http.post).toHaveBeenCalledWith("/api/v1/auth/logout");
   expect(container.textContent).toContain("Sign in to DanceHub");
 
   await act(async () => root.unmount());
