@@ -106,7 +106,7 @@ test("sign_in_form_submits_credentials_and_returns_administrator_session", async
   };
   const onSignIn = vi.fn();
   http.post.mockResolvedValueOnce({
-    data: { access_token: "signed-token", token_type: "bearer", expires_in: 900 }
+    data: { message: "Signed in." }
   });
   http.get.mockResolvedValueOnce({ data: administrator });
 
@@ -130,9 +130,7 @@ test("sign_in_form_submits_credentials_and_returns_administrator_session", async
     email: "jamie@example.com",
     password: "DanceHub!2026"
   });
-  expect(http.get).toHaveBeenCalledWith("/api/auth/me", {
-    headers: { Authorization: "Bearer signed-token" }
-  });
+  expect(http.get).toHaveBeenCalledWith("/api/auth/me");
   expect(onSignIn).toHaveBeenCalledWith(administrator);
 
   await act(async () => root.unmount());

@@ -32,14 +32,12 @@ export async function signInAdministrator(credentials: {
   email: string;
   password: string;
 }): Promise<AdministratorSession> {
-  const token = await client.post<{ access_token: string }>(
-    "/api/auth/login",
-    credentials
-  );
-  const session = await client.get<AdministratorSession>("/api/auth/me", {
-    headers: { Authorization: `Bearer ${token.data.access_token}` }
-  });
-  return session.data;
+  await client.post("/api/auth/login", credentials);
+  const session = await fetchAdministratorSession();
+  if (!session) {
+    throw new Error("Sign-in did not establish an administrator session.");
+  }
+  return session;
 }
 
 export interface RegistrationDetails {
