@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
 
 import App from "./App";
+import { fetchHealthMessage } from "./api";
 import SignInForm from "./SignInForm";
 
 const http = vi.hoisted(() => ({
@@ -31,6 +32,22 @@ afterEach(() => {
 
 test("frontend_auth_requests_send_cookies", () => {
   expect(http.config).toMatchObject({ withCredentials: true });
+});
+
+test("app_renews_expired_access_and_retries_request", async () => {
+  http.get
+    .mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status: 401 }
+    })
+    .mockResolvedValueOnce({ data: { message: "DanceHub CRM is ready" } });
+  http.post.mockResolvedValueOnce({ data: { message: "Session renewed." } });
+
+  await expect(fetchHealthMessage()).resolves.toBe("DanceHub CRM is ready");
+
+  expect(http.post).toHaveBeenCalledWith("/api/auth/refresh");
+  expect(http.get).toHaveBeenCalledTimes(2);
+  expect(http.get).toHaveBeenLastCalledWith("/api/health");
 });
 
 test("app_restores_crm_home_after_browser_reload_with_valid_cookie", async () => {
@@ -72,6 +89,10 @@ test("signed_out_app_renders_email_and_password_fields", async () => {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } }
   });
+  http.post.mockRejectedValueOnce({
+    isAxiosError: true,
+    response: { status: 401 }
+  });
   http.get.mockRejectedValueOnce({
     isAxiosError: true,
     response: { status: 401 }
@@ -107,9 +128,7 @@ test("sign_in_form_submits_credentials_and_returns_administrator_session", async
     academy_name: "Acme Dance Academy"
   };
   const onSignIn = vi.fn();
-  http.post.mockResolvedValueOnce({
-    data: { message: "Signed in." }
-  });
+  http.post.mockResolvedValueOnce({ data: { message: "Signed in." } });
   http.get.mockResolvedValueOnce({ data: administrator });
 
   await act(async () => {
@@ -180,9 +199,12 @@ test("successful_sign_in_displays_crm_home", async () => {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } }
   });
-  http.post.mockResolvedValueOnce({
-    data: { message: "Signed in." }
-  });
+  http.post
+    .mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status: 401 }
+    })
+    .mockResolvedValueOnce({ data: { message: "Signed in." } });
   http.get
     .mockRejectedValueOnce({ isAxiosError: true, response: { status: 401 } })
     .mockResolvedValueOnce({

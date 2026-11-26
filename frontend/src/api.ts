@@ -6,8 +6,22 @@ const client = axios.create({
 });
 
 export async function fetchHealthMessage(): Promise<string> {
-  const response = await client.get<{ message: string }>("/api/health");
-  return response.data.message;
+  const message = await getWithSessionRefresh<{ message: string }>("/api/health");
+  return message.message;
+}
+
+async function getWithSessionRefresh<T>(url: string): Promise<T> {
+  try {
+    const response = await client.get<T>(url);
+    return response.data;
+  } catch (error) {
+    if (!axios.isAxiosError(error) || error.response?.status !== 401) {
+      throw error;
+    }
+    await client.post("/api/auth/refresh");
+    const response = await client.get<T>(url);
+    return response.data;
+  }
 }
 
 export interface AdministratorSession {
@@ -18,8 +32,7 @@ export interface AdministratorSession {
 
 export async function fetchAdministratorSession(): Promise<AdministratorSession | null> {
   try {
-    const response = await client.get<AdministratorSession>("/api/auth/me");
-    return response.data;
+    return await getWithSessionRefresh<AdministratorSession>("/api/auth/me");
   } catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 401) {
       return null;
