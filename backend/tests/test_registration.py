@@ -133,6 +133,20 @@ def test_rejects_case_insensitive_academy_name_phone_and_administrator_email_dup
             ).scalar_one() == 1
 
 
+def test_refresh_session_storage_is_created_by_migration(registration_client):
+    _, engine = registration_client
+
+    with engine.connect() as connection:
+            table_name = connection.execute(
+                text(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'refresh_sessions'"
+                )
+            ).scalar_one_or_none()
+
+    assert table_name == "refresh_sessions"
+
+
 @pytest.mark.parametrize(
     ("password", "correction"),
     [
