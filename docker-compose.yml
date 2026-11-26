@@ -20,12 +20,19 @@ services:
       context: ./backend
     environment:
       DATABASE_URL: postgresql+psycopg://dancehub:dancehub@db:5432/dancehub
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-5}
+      DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-10}
+      DATABASE_POOL_TIMEOUT_SECONDS: ${DATABASE_POOL_TIMEOUT_SECONDS:-30}
+      DATABASE_POOL_RECYCLE_SECONDS: ${DATABASE_POOL_RECYCLE_SECONDS:-1800}
+      DATABASE_RETRY_INITIAL_SECONDS: ${DATABASE_RETRY_INITIAL_SECONDS:-1}
+      DATABASE_RETRY_MAX_SECONDS: ${DATABASE_RETRY_MAX_SECONDS:-30}
+      DATABASE_HEALTH_CHECK_INTERVAL_SECONDS: ${DATABASE_HEALTH_CHECK_INTERVAL_SECONDS:-10}
       CORS_ORIGINS: http://localhost:5173
       OPERATOR_SECRET: ${OPERATOR_SECRET:-}
       JWT_SECRET: ${JWT_SECRET:-}
     depends_on:
       db:
-        condition: service_healthy
+        condition: service_started
     ports:
       - "8000:8000"
 
